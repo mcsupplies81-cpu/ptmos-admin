@@ -33,6 +33,7 @@ type UsersResponse = {
 };
 
 type UsageResponse = {
+  activeNow: number;
   features: UsageFeature[];
   error?: string;
 };
@@ -106,6 +107,7 @@ function getUsageTableEmptyState(loading: boolean, error: string | null) {
 export default function AnalyticsPage() {
   const [users, setUsers] = useState<AnalyticsUser[]>([]);
   const [usageFeatures, setUsageFeatures] = useState<UsageFeature[]>([]);
+  const [activeNow, setActiveNow] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -132,6 +134,7 @@ export default function AnalyticsPage() {
         }
 
         setUsers(usersPayload.users ?? []);
+        setActiveNow(usagePayload.activeNow ?? 0);
         setUsageFeatures(usagePayload.features ?? []);
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : 'Unable to load analytics.');
@@ -155,11 +158,12 @@ export default function AnalyticsPage() {
 
     return [
       { label: 'Total Users', value: totalUsers, helper: 'Auth users' },
+      { label: 'Active (30m)', value: activeNow, helper: 'Profiles active in last 30 min' },
       { label: 'New This Month', value: newThisMonth, helper: 'Created since month start' },
       { label: 'DAU', value: dau, helper: 'Signed in today' },
       { label: 'MAU', value: mau, helper: 'Signed in last 30 days' },
     ];
-  }, [firstDayThisMonth, thirtyDaysAgo, today, users]);
+  }, [activeNow, firstDayThisMonth, thirtyDaysAgo, today, users]);
 
   const growthData = useMemo(() => {
     const dates = buildDailyDates(30);
@@ -213,7 +217,7 @@ export default function AnalyticsPage() {
 
       {error ? <div className="mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-red-200">{error}</div> : null}
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
         {kpis.map((kpi) => (
           <article className="rounded-2xl border border-border bg-card p-6 shadow-xl shadow-black/10" key={kpi.label}>
             <p className="text-sm font-semibold uppercase tracking-wide text-text-secondary">{kpi.label}</p>
