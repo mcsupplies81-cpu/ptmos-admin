@@ -38,7 +38,21 @@ export async function GET() {
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 7);
 
-    const users = await listAdminAnalyticsUsers();
+    const thirtyMinAgo = new Date();
+    thirtyMinAgo.setUTCMinutes(thirtyMinAgo.getUTCMinutes() - 30);
+
+    const [{ count: activeNow, error: activeNowError }, users] = await Promise.all([
+      supabaseAdmin
+        .from('profiles')
+        .select('id', { count: 'exact', head: true })
+        .gte('last_active_at', thirtyMinAgo.toISOString()),
+      listAdminAnalyticsUsers(),
+    ]);
+
+    if (activeNowError) {
+      throw activeNowError;
+    }
+
     const totalUsers = users.length;
 
     const features = await Promise.all(
@@ -58,7 +72,12 @@ export async function GET() {
       }),
     );
 
-    return NextResponse.json({ generatedAt: new Date().toISOString(), totalUsers, features });
+    return NextResponse.json({
+      generatedAt: new Date().toISOString(),
+      totalUsers,
+      activeNow: activeNow ?? 0,
+      features,
+    });
   } catch (error) {
     console.error('Unable to load analytics usage:', error);
 
