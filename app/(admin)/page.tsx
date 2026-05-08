@@ -1,9 +1,77 @@
+import { UserSignupsChart } from './_components/user-signups-chart';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 import { supabase } from '@/lib/supabase';
 
 type StatCard = {
   label: string;
   value: number;
 };
+
+type SignupCountRow = {
+  day: string;
+  count: number | string;
+};
+
+type UserSignupChartPoint = {
+  day: string;
+  signups: number;
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function startOfUtcDay(date: Date) {
+  const nextDate = new Date(date);
+  nextDate.setUTCHours(0, 0, 0, 0);
+
+  return nextDate;
+}
+
+function addUtcDays(date: Date, days: number) {
+  return new Date(startOfUtcDay(date).getTime() + days * DAY_MS);
+}
+
+function dateKey(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function buildThirtyDaySignupData(rows: SignupCountRow[]): UserSignupChartPoint[] {
+  const signupsByDay = new Map(
+    rows.map((row) => [dateKey(new Date(row.day)), Number(row.count) || 0]),
+  );
+  const today = startOfUtcDay(new Date());
+  const firstDay = addUtcDays(today, -29);
+
+  return Array.from({ length: 30 }, (_, index) => {
+    const day = addUtcDays(firstDay, index);
+    const key = dateKey(day);
+
+    return {
+      day: key,
+      signups: signupsByDay.get(key) ?? 0,
+    };
+  });
+}
+
+async function getDailyUserSignups(): Promise<UserSignupChartPoint[]> {
+  const { data, error } = await supabaseAdmin.rpc('exec_sql', {
+    sql: `
+      select date_trunc('day', created_at) as day, count(*)
+      from auth.users
+      group by day
+      order by day desc
+      limit 30;
+    `,
+  });
+
+  if (error) {
+    console.error('Unable to load daily user signups:', error.message);
+    return [];
+  }
+
+  const rows = (Array.isArray(data) ? data : []) as SignupCountRow[];
+
+  return buildThirtyDaySignupData(rows);
+}
 
 async function getTableCount(tableName: string, gteFilter?: { column: string; value: string }) {
   let query = supabase.from(tableName).select('*', { count: 'exact', head: true });
@@ -26,10 +94,11 @@ export default async function DashboardPage() {
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
 
-  const [totalUsers, protocolsCreated, doseLogsToday] = await Promise.all([
+  const [totalUsers, protocolsCreated, doseLogsToday, dailyUserSignups] = await Promise.all([
     getTableCount('profiles'),
     getTableCount('protocols'),
     getTableCount('dose_logs', { column: 'logged_at', value: today.toISOString() }),
+    getDailyUserSignups(),
   ]);
 
   const stats: StatCard[] = [
@@ -52,6 +121,7 @@ export default async function DashboardPage() {
           </article>
         ))}
       </div>
+      <UserSignupsChart data={dailyUserSignups} />
     </section>
   );
 }
