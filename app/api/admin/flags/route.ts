@@ -1,55 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { logAudit } from "@/lib/audit";
+import { getAdminEmailFromRequest, logAudit } from "@/lib/audit";
 import { supabase } from "@/lib/supabase";
-
-type SupabaseSessionCookie = {
-  access_token?: string;
-};
-
-function decodeBase64Url(value: string) {
-  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
-
-  return Buffer.from(padded, "base64").toString("utf8");
-}
-
-function getJwtPayload(token: string) {
-  const [, payload] = token.split(".");
-
-  if (!payload) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(decodeBase64Url(payload)) as { email?: string };
-  } catch {
-    return null;
-  }
-}
-
-function getAdminEmail(request: NextRequest) {
-  const sessionCookie = request.cookies
-    .getAll()
-    .find((cookie) => cookie.name.startsWith("sb-") && cookie.name.endsWith("-auth-token"));
-
-  if (!sessionCookie?.value) {
-    return null;
-  }
-
-  try {
-    const decodedValue = decodeURIComponent(sessionCookie.value);
-    const jsonValue = decodedValue.startsWith("base64-")
-      ? decodeBase64Url(decodedValue.replace("base64-", ""))
-      : decodedValue;
-    const session = JSON.parse(jsonValue) as SupabaseSessionCookie | [string, string];
-    const token = Array.isArray(session) ? session[0] : session.access_token;
-
-    return token ? (getJwtPayload(token)?.email ?? null) : null;
-  } catch {
-    return null;
-  }
-}
 
 export async function GET() {
   const { data, error } = await supabase.from("feature_flags").select("*").order("key", { ascending: true });
@@ -69,7 +21,7 @@ export async function POST(request: NextRequest) {
   }
 
   const key = body.key.trim();
-  const adminEmail = getAdminEmail(request);
+  const adminEmail = await getAdminEmailFromRequest(request);
   const { data: existingFlag } = await supabase
     .from("feature_flags")
     .select("enabled")
@@ -94,23 +46,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  try {
-    await logAudit(supabase, {
-      adminEmail,
-      action: "update_feature_flag",
-      targetType: "feature_flag",
-      targetId: key,
-      details: {
-        enabled: body.enabled,
-        previousEnabled: existingFlag?.enabled ?? null,
-      },
-    });
-  } catch (auditError) {
-    return NextResponse.json(
-      { error: auditError instanceof Error ? auditError.message : "Feature flag was saved, but audit logging failed." },
-      { status: 500 },
-    );
-  }
+  await logAudit(adminEmail ?? 'unknown', "toggle_feature_flag", "feature_flag", key, {
+    enabled: body.enabled,
+    previousEnabled: existingFlag?.enabled ?? null,
+  });
 
   return NextResponse.json({ flag: data });
 }

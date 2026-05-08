@@ -1,6 +1,8 @@
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { getAdminEmailFromRequest, logAudit } from '@/lib/audit';
+
 const BAN_DURATION = '876600h';
 
 type Profile = {
@@ -192,6 +194,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     }
 
     const supabase = createAdminClient();
+    const adminEmail = await getAdminEmailFromRequest(request);
     await ensureProfileAdminColumns(supabase);
 
     if (Object.keys(profileUpdates).length) {
@@ -210,6 +213,19 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       if (error) {
         throw error;
       }
+    }
+
+    if (typeof body.is_pro === 'boolean') {
+      await logAudit(adminEmail ?? 'unknown', body.is_pro ? 'grant_pro' : 'revoke_pro', 'user', params.id, {
+        isPro: body.is_pro,
+      });
+    }
+
+    if (typeof body.banned === 'boolean') {
+      await logAudit(adminEmail ?? 'unknown', body.banned ? 'ban_user' : 'unban_user', 'user', params.id, {
+        banned: body.banned,
+        banDuration: body.banned ? BAN_DURATION : 'none',
+      });
     }
 
     const [{ data: authData, error: authError }, profile, stats] = await Promise.all([
