@@ -362,6 +362,7 @@ export default function ProvidersPage() {
                   <div className="mt-5 flex items-center justify-between border-t border-slate-800 pt-4 text-sm text-slate-400">
                     <span>★ {provider.rating ?? 0}</span>
                     <span>{provider.review_count ?? 0} reviews</span>
+                    <a href={`/providers/${provider.id}/membership`} onClick={(e) => e.stopPropagation()} className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent/20">Membership</a>
                   </div>
                 </article>
               );
