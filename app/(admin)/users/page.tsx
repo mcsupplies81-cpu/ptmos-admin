@@ -49,7 +49,6 @@ export default function UsersPage() {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -99,32 +98,8 @@ export default function UsersPage() {
   const pageCount = Math.max(1, Math.ceil(filteredProfiles.length / PAGE_SIZE));
   const paginatedProfiles = filteredProfiles.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  async function exportCsv() {
-    setExporting(true);
-    setError(null);
-
-    try {
-      const response = await fetch("/api/admin/users/export");
-
-      if (!response.ok) {
-        const errorBody = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(errorBody?.error ?? "Unable to export users.");
-      }
-
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "users.csv";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-    } catch (exportError) {
-      setError(exportError instanceof Error ? exportError.message : "Unable to export users.");
-    } finally {
-      setExporting(false);
-    }
+  function exportCsv() {
+    window.open("/api/admin/users/export", "_blank");
   }
 
   return (
@@ -138,19 +113,18 @@ export default function UsersPage() {
             </span>
           </div>
           <div className="flex flex-col gap-3 md:flex-row md:items-center">
-            <button
-              className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={exporting}
-              onClick={exportCsv}
-            >
-              {exporting ? "Exporting..." : "Export CSV"}
-            </button>
             <input
               className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400 md:w-80"
               placeholder="Search by name or email..."
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
+            <button
+              className="rounded-xl border border-cyan-400/30 bg-cyan-400/10 px-4 py-3 text-sm font-semibold text-cyan-200 transition hover:bg-cyan-400/20"
+              onClick={exportCsv}
+            >
+              Export CSV
+            </button>
           </div>
         </header>
 
