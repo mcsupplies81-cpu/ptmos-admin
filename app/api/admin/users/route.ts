@@ -39,11 +39,15 @@ async function ensureProfileAdminColumns(supabase: SupabaseClient) {
   });
 }
 
-async function getProfiles(supabase: SupabaseClient) {
+async function getProfiles(supabase: SupabaseClient, ids: string[]) {
+  if (!ids.length) {
+    return [];
+  }
+
   let { data, error } = await supabase
     .from('profiles')
     .select('id,full_name,email,created_at,is_pro')
-    .order('created_at', { ascending: false })
+    .in('id', ids)
     .returns<Profile[]>();
 
   if (isMissingColumnError(error)) {
@@ -51,7 +55,7 @@ async function getProfiles(supabase: SupabaseClient) {
     const retry = await supabase
       .from('profiles')
       .select('id,full_name,email,created_at,is_pro')
-      .order('created_at', { ascending: false })
+      .in('id', ids)
       .returns<Profile[]>();
     data = retry.data;
     error = retry.error;
@@ -64,28 +68,44 @@ async function getProfiles(supabase: SupabaseClient) {
   return data ?? [];
 }
 
-async function getAllAuthUsers(supabase: SupabaseClient) {
-  const users: User[] = [];
-  let page = 1;
-  const perPage = 1000;
+async function getAuthUsers(supabase: SupabaseClient, page: number, perPage: number) {
+  const { data, error } = await supabase.auth.admin.listUsers({ page, perPage });
 
-  while (true) {
-    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage });
-
-    if (error) {
-      throw error;
-    }
-
-    users.push(...data.users);
-
-    if (data.users.length < perPage) {
-      break;
-    }
-
-    page += 1;
+  if (error) {
+    throw error;
   }
 
-  return users;
+  const listData = data as typeof data & { total?: number };
+
+  return {
+    users: listData.users,
+    total: listData.total ?? listData.users.length,
+  };
+}
+
+function parsePositiveInteger(value: string | null, fallback: number) {
+  const parsed = Number.parseInt(value ?? '', 10);
+
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallback;
+  }
+
+  return parsed;
+}
+
+function normalizeSearchQuery(value: string | null) {
+  return value?.trim().toLowerCase() ?? '';
+}
+
+function matchesSearch(user: { full_name: string | null; email: string | null }, search: string) {
+  if (!search) {
+    return true;
+  }
+
+  const fullName = user.full_name?.toLowerCase() ?? '';
+  const email = user.email?.toLowerCase() ?? '';
+
+  return fullName.includes(search) || email.includes(search);
 }
 
 function isUserBanned(user: User | undefined) {
@@ -98,41 +118,39 @@ function isUserBanned(user: User | undefined) {
   return new Date(bannedUntil).getTime() > Date.now();
 }
 
-export async function GET(_request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
     const supabase = createAdminClient();
-    const [profiles, authUsers] = await Promise.all([getProfiles(supabase), getAllAuthUsers(supabase)]);
-    const authUserById = new Map<string, User>(authUsers.map((user: User) => [user.id, user]));
-    const profileIds = new Set<string>(profiles.map((profile: Profile) => profile.id));
+    const page = parsePositiveInteger(request.nextUrl.searchParams.get('page'), 1);
+    const perPage = parsePositiveInteger(request.nextUrl.searchParams.get('perPage'), 25);
+    const search = normalizeSearchQuery(request.nextUrl.searchParams.get('search'));
+    const { users: authUsers, total } = await getAuthUsers(supabase, page, perPage);
+    const profiles = await getProfiles(
+      supabase,
+      authUsers.map((user: User) => user.id),
+    );
+    const profileById = new Map<string, Profile>(profiles.map((profile: Profile) => [profile.id, profile]));
 
-    const users = [
-      ...profiles.map((profile: Profile) => {
-        const authUser = authUserById.get(profile.id);
+    const users = authUsers
+      .map((authUser: User) => {
+        const profile = profileById.get(authUser.id);
 
         return {
-          id: profile.id,
-          full_name: profile.full_name,
-          email: authUser?.email ?? profile.email,
-          created_at: profile.created_at ?? authUser?.created_at ?? null,
-          is_pro: Boolean(profile.is_pro),
+          id: authUser.id,
+          full_name:
+            profile?.full_name ??
+            (typeof authUser.user_metadata?.full_name === 'string' ? authUser.user_metadata.full_name : null),
+          email: authUser.email ?? profile?.email ?? null,
+          created_at: profile?.created_at ?? authUser.created_at ?? null,
+          is_pro: Boolean(profile?.is_pro),
           banned: isUserBanned(authUser),
-          last_sign_in_at: authUser?.last_sign_in_at ?? null,
+          last_sign_in_at: authUser.last_sign_in_at ?? null,
         };
-      }),
-      ...authUsers
-        .filter((user: User) => !profileIds.has(user.id))
-        .map((user: User) => ({
-          id: user.id,
-          full_name: typeof user.user_metadata?.full_name === 'string' ? user.user_metadata.full_name : null,
-          email: user.email ?? null,
-          created_at: user.created_at ?? null,
-          is_pro: false,
-          banned: isUserBanned(user),
-          last_sign_in_at: user.last_sign_in_at ?? null,
-        })),
-    ].sort((a, b) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime());
+      })
+      .filter((user) => matchesSearch(user, search))
+      .sort((a, b) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime());
 
-    return NextResponse.json({ users });
+    return NextResponse.json({ users, total, page, perPage });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Unable to load users.' },
