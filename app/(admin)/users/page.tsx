@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type Profile = {
@@ -10,6 +10,13 @@ type Profile = {
   created_at: string | null;
   is_pro?: boolean | null;
   banned?: boolean | null;
+};
+
+type UsersResponse = {
+  users: Profile[];
+  total: number;
+  page: number;
+  perPage: number;
 };
 
 const PAGE_SIZE = 25;
@@ -47,56 +54,73 @@ export default function UsersPage() {
   const router = useRouter();
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [perPage, setPerPage] = useState(PAGE_SIZE);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedQuery(query);
+      setPage(1);
+    }, 300);
+
+    return () => window.clearTimeout(timeout);
+  }, [query]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
     async function loadProfiles() {
       setLoading(true);
       setError(null);
 
       try {
-        const response = await fetch("/api/admin/users", { cache: "no-store" });
+        const params = new URLSearchParams({
+          page: String(page),
+          perPage: String(PAGE_SIZE),
+        });
+        const trimmedQuery = debouncedQuery.trim();
+
+        if (trimmedQuery) {
+          params.set("search", trimmedQuery);
+        }
+
+        const response = await fetch(`/api/admin/users?${params.toString()}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
 
         if (!response.ok) {
           const errorBody = (await response.json().catch(() => null)) as { error?: string } | null;
           throw new Error(errorBody?.error ?? "Unable to load users.");
         }
 
-        const data = (await response.json()) as { users: Profile[] };
+        const data = (await response.json()) as UsersResponse;
         setProfiles(data.users);
+        setTotal(data.total);
+        setPerPage(data.perPage);
       } catch (loadError) {
+        if (loadError instanceof DOMException && loadError.name === "AbortError") {
+          return;
+        }
+
         setError(loadError instanceof Error ? loadError.message : "Unable to load users.");
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
       }
     }
 
     loadProfiles();
-  }, []);
 
-  useEffect(() => {
-    setPage(1);
-  }, [query]);
+    return () => controller.abort();
+  }, [page, debouncedQuery]);
 
-  const filteredProfiles = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-
-    if (!normalizedQuery) {
-      return profiles;
-    }
-
-    return profiles.filter((profile) => {
-      const name = profile.full_name?.toLowerCase() ?? "";
-      const email = profile.email?.toLowerCase() ?? "";
-
-      return name.includes(normalizedQuery) || email.includes(normalizedQuery);
-    });
-  }, [profiles, query]);
-
-  const pageCount = Math.max(1, Math.ceil(filteredProfiles.length / PAGE_SIZE));
-  const paginatedProfiles = filteredProfiles.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const pageCount = Math.max(1, Math.ceil(total / perPage));
 
   function exportCsv() {
     window.open("/api/admin/users/export", "_blank");
@@ -109,7 +133,7 @@ export default function UsersPage() {
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-bold tracking-tight">Users</h1>
             <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1 text-sm font-semibold text-cyan-200">
-              {profiles.length} total
+              {total} total
             </span>
           </div>
           <div className="flex flex-col gap-3 md:flex-row md:items-center">
@@ -148,8 +172,8 @@ export default function UsersPage() {
                     Loading users...
                   </td>
                 </tr>
-              ) : paginatedProfiles.length ? (
-                paginatedProfiles.map((profile) => (
+              ) : profiles.length ? (
+                profiles.map((profile) => (
                   <tr
                     className="cursor-pointer transition hover:bg-slate-800/40"
                     key={profile.id}
@@ -185,14 +209,14 @@ export default function UsersPage() {
           <div className="flex gap-2">
             <button
               className="rounded-lg border border-slate-700 px-4 py-2 font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={page === 1}
+              disabled={loading || page === 1}
               onClick={() => setPage((currentPage) => Math.max(1, currentPage - 1))}
             >
               Prev
             </button>
             <button
               className="rounded-lg border border-slate-700 px-4 py-2 font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={page === pageCount}
+              disabled={loading || page === pageCount}
               onClick={() => setPage((currentPage) => Math.min(pageCount, currentPage + 1))}
             >
               Next
