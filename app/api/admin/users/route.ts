@@ -124,17 +124,38 @@ export async function GET(request: NextRequest) {
     const page = parsePositiveInteger(request.nextUrl.searchParams.get('page'), 1);
     const perPage = parsePositiveInteger(request.nextUrl.searchParams.get('perPage'), 25);
     const search = normalizeSearchQuery(request.nextUrl.searchParams.get('search'));
-    const { users: authUsers, total } = await getAuthUsers(supabase, page, perPage);
+
+    let authUsers: User[];
+    let total: number;
+
+    if (search) {
+      // When searching, fetch all users so we can filter and paginate accurately.
+      // listUsers maxes at 1000 per page; loop until exhausted.
+      const allUsers: User[] = [];
+      let fetchPage = 1;
+      while (true) {
+        const { users: batch, total: batchTotal } = await getAuthUsers(supabase, fetchPage, 1000);
+        allUsers.push(...batch);
+        if (allUsers.length >= batchTotal || batch.length < 1000) break;
+        fetchPage++;
+      }
+      authUsers = allUsers;
+      total = allUsers.length; // will be narrowed after filter below
+    } else {
+      const result = await getAuthUsers(supabase, page, perPage);
+      authUsers = result.users;
+      total = result.total;
+    }
+
     const profiles = await getProfiles(
       supabase,
       authUsers.map((user: User) => user.id),
     );
     const profileById = new Map<string, Profile>(profiles.map((profile: Profile) => [profile.id, profile]));
 
-    const users = authUsers
+    let users = authUsers
       .map((authUser: User) => {
         const profile = profileById.get(authUser.id);
-
         return {
           id: authUser.id,
           full_name:
@@ -149,6 +170,11 @@ export async function GET(request: NextRequest) {
       })
       .filter((user) => matchesSearch(user, search))
       .sort((a, b) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime());
+
+    if (search) {
+      total = users.length;
+      users = users.slice((page - 1) * perPage, page * perPage);
+    }
 
     return NextResponse.json({ users, total, page, perPage });
   } catch (error) {
